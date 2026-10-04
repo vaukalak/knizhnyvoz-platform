@@ -5,8 +5,6 @@ import {
   formatDuration,
   searchBooks,
   type BookSummary,
-  type Category,
-  type Chapter,
 } from "../src/catalog.js";
 
 const books: BookSummary[] = [
@@ -19,6 +17,8 @@ const books: BookSummary[] = [
     categories: [{ id: "c1", key: "babies", name: "Для малечы (0+)" }],
     roles: [{ role: "Чытае", names: ["Алена Гарэцкая"] }],
     totalDuration: 3_600_000,
+    isPublished: true,
+    chapters: [],
   },
   {
     id: "book-2",
@@ -29,6 +29,8 @@ const books: BookSummary[] = [
     categories: [{ id: "c2", key: "olderchildren", name: "12+ для падлеткаў" }],
     roles: [{ role: "Чытае", names: ["Ігар Сігоў"] }],
     totalDuration: 90_000,
+    isPublished: true,
+    chapters: [],
   },
 ];
 
@@ -70,30 +72,54 @@ describe("searchBooks", () => {
 });
 
 describe("CatalogClient", () => {
-  it("чытае кнігі, катэгорыі і главы", async () => {
-    const categories: Category[] = books[0]!.categories;
-    const chapters: Chapter[] = [
-      {
-        id: "ch-1",
-        name: "Раздзел 1",
-        duration: 60_000,
-        url: "https://example.test/1.mp3",
-        blocked: false,
-      },
-    ];
-    const fetchImpl: typeof fetch = async (input) => {
+  it("збірае аўтара з роляў і людзей і шле токен", async () => {
+    const seen: { url: string; authorization?: string }[] = [];
+    const apiBook = {
+      id: "book-1",
+      title: "Вожык і ліс",
+      description: "Казка",
+      banner_url: "https://example.test/1.jpg",
+      isPublished: false,
+      categories: [{ id: "c1", key: "babies", name: "Для малечы (0+)" }],
+      roles: [{ role_id: "role-author", person_id: "person-1" }],
+      chapters: [
+        {
+          id: "ch-1",
+          title: "Раздзел 1",
+          number: 1,
+          duration: 3_600_000,
+          url: "https://example.test/1.mp3",
+        },
+      ],
+    };
+    const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
+      const headers = new Headers(init?.headers);
+      seen.push({ url, authorization: headers.get("authorization") ?? undefined });
       const body = url.endsWith("/books")
-        ? books
-        : url.endsWith("/gallery-categories")
-          ? categories
-          : chapters;
+        ? [apiBook]
+        : url.endsWith("/people")
+          ? [{ id: "person-1", firstName: "Янка", lastName: "Маўр" }]
+          : url.endsWith("/roles")
+            ? [{ id: "role-author", name: "Аўтар" }]
+            : url.endsWith("/categories")
+              ? apiBook.categories
+              : apiBook;
       return new Response(JSON.stringify(body), { status: 200 });
     };
-    const catalog = new CatalogClient("https://knizhnyvoz.test", fetchImpl, () => 0);
+    const catalog = new CatalogClient(
+      "https://api.knizhnyvoz.test",
+      fetchImpl,
+      () => 0,
+      "secret-token",
+    );
     const found = await catalog.getBook("book-1");
+    assert.equal(found.author, "Янка Маўр");
     assert.equal(found.chapters[0]?.name, "Раздзел 1");
     assert.equal(found.duration, "1 гадз 0 хв");
+    assert.equal(found.isPublished, false);
+    assert.equal(seen[0]?.url, "https://api.knizhnyvoz.test/books");
+    assert.equal(seen[0]?.authorization, "Bearer secret-token");
     const listed = await catalog.listCategories();
     assert.equal(listed[0]?.key, "babies");
   });

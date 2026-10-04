@@ -6,7 +6,8 @@ import * as z from "zod/v4";
 import { CatalogClient, searchBooks } from "./catalog.js";
 
 const SERVER_INSTRUCTIONS = [
-  "Каталог бясплатных беларускіх аўдыякніг «Кніжны воз» (https://knizhnyvoz.com).",
+  "Каталог аўдыякніг «Кніжны воз» з https://api.knizhnyvoz.com (Swagger: /api).",
+  "Чытанне апублікаваных кніг працуе без токена. KNIZHNYVOZ_API_TOKEN дадае Authorization: Bearer і адкрывае чарнавікі.",
   "Кнігі для дзяцей і падлеткаў. Спачатку шукай праз search_books, потым бяры главы праз get_book.",
   "Катэгорыі бяры з list_categories і перадавай іх key у search_books.",
   "Адказвай па-беларуску, калі карыстальнік піша па-беларуску.",

@@ -5,7 +5,10 @@ import {
   localhostOriginValidation,
   toNodeHandler,
 } from "@modelcontextprotocol/node";
+import { loadLocalEnv } from "./env.js";
 import { createServer } from "./server.js";
+
+loadLocalEnv();
 
 const port = Number(process.env.PORT ?? 3000);
 const host = process.env.HOST ?? "127.0.0.1";

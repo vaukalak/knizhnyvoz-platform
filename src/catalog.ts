@@ -1,4 +1,4 @@
-const DEFAULT_API_BASE = "https://knizhnyvoz.com";
+const DEFAULT_API_BASE = "https://api.knizhnyvoz.com";
 const CACHE_TTL_MS = 5 * 60 * 1000;
 
 export type Category = {
@@ -21,6 +21,8 @@ export type BookSummary = {
   categories: Category[];
   roles: Role[];
   totalDuration: number;
+  isPublished: boolean;
+  chapters: Chapter[];
 };
 
 export type Chapter = {
@@ -42,6 +44,7 @@ export type BookCard = {
   duration: string;
   imageUri: string;
   url: string;
+  isPublished: boolean;
 };
 
 export type BookDetails = BookCard & {
@@ -94,6 +97,7 @@ export function toBookCard(book: BookSummary): BookCard {
     duration: formatDuration(book.totalDuration),
     imageUri: book.imageUri,
     url: bookPageUrl(book.id),
+    isPublished: book.isPublished,
   };
 }
 
@@ -108,8 +112,11 @@ function bookHaystack(book: BookSummary): string {
   const categoryText = book.categories
     .flatMap((category) => [category.key, category.name])
     .join(" ");
+  const chapterText = book.chapters.map((chapter) => chapter.name).join(" ");
   return normalize(
-    [book.name, book.author, book.description, roleText, categoryText].join(" "),
+    [book.name, book.author, book.description, roleText, categoryText, chapterText].join(
+      " ",
+    ),
   );
 }
 
@@ -182,30 +189,70 @@ function excerpt(text: string, maxLength: number): string {
   return `${text.slice(0, maxLength).trimEnd()}…`;
 }
 
+type ApiChapter = {
+  id: string;
+  title: string;
+  number?: number;
+  url: string;
+  duration: number;
+};
+
+type ApiBookRole = {
+  role_id: string;
+  person_id: string;
+};
+
+type ApiBook = {
+  id: string;
+  title: string;
+  description?: string | null;
+  banner_url?: string | null;
+  isPublished?: boolean;
+  chapters?: ApiChapter[] | null;
+  categories?: Category[] | null;
+  roles?: ApiBookRole[] | null;
+};
+
+type ApiPerson = {
+  id: string;
+  firstName?: string | null;
+  lastName?: string | null;
+};
+
+type ApiRole = {
+  id: string;
+  name: string;
+};
+
 export class CatalogClient {
   private readonly booksCache = new Map<string, CacheEntry<BookSummary[]>>();
   private readonly categoriesCache = new Map<string, CacheEntry<Category[]>>();
-  private readonly chaptersCache = new Map<string, CacheEntry<Chapter[]>>();
 
   constructor(
     private readonly apiBase = process.env.KNIZHNYVOZ_API_BASE ?? DEFAULT_API_BASE,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly now: () => number = () => Date.now(),
+    private readonly token = process.env.KNIZHNYVOZ_API_TOKEN,
   ) {}
 
   async listBooks(): Promise<BookSummary[]> {
-    return this.cached(this.booksCache, "books", async () => {
-      const books = await this.getJson<BookSummary[]>("books");
-      return books.map((book) => ({
-        ...book,
-        description: book.description?.replaceAll("&nbsp;", " ") ?? "",
-      }));
+    const cacheKey = this.accessToken() ? "books" : "books/published";
+    return this.cached(this.booksCache, cacheKey, async () => {
+      const [listed, people, roles] = await Promise.all([
+        this.getJson<ApiBook[]>(cacheKey),
+        this.getJson<ApiPerson[]>("people"),
+        this.getJson<ApiRole[]>("roles"),
+      ]);
+      const detailed = listed.every(hasBookRelations)
+        ? listed
+        : await mapPool(listed, 8, (book) => this.getJson<ApiBook>(`books/${book.id}`));
+      return detailed.map((book) => toSummary(book, people, roles));
     });
   }
 
   async listCategories(): Promise<Category[]> {
     return this.cached(this.categoriesCache, "categories", () => {
-      return this.getJson<Category[]>("gallery-categories");
+      return this.getJson<Category[]>("categories");
     });
   }
 
@@ -215,13 +262,10 @@ export class CatalogClient {
     if (!book) {
       throw new Error(`Кніга ${bookId} не знойдзена`);
     }
-    const chapters = await this.cached(this.chaptersCache, bookId, () => {
-      return this.getJson<Chapter[]>(`books/${encodeURIComponent(bookId)}`);
-    });
     return {
       ...toBookCard(book),
-      chapters: chapters.map((chapter, index) => ({
-        index,
+      chapters: book.chapters.map((chapter, index) => ({
+        index: index + 1,
         id: chapter.id,
         name: chapter.name,
         durationMs: chapter.duration,
@@ -232,11 +276,19 @@ export class CatalogClient {
     };
   }
 
+  private accessToken(): string | undefined {
+    const token = this.token?.trim();
+    return token ? token : undefined;
+  }
+
   private async getJson<T>(path: string): Promise<T> {
     const url = new URL(path, this.apiBase.endsWith("/") ? this.apiBase : `${this.apiBase}/`);
-    const response = await this.fetchImpl(url, {
-      headers: { accept: "application/json" },
-    });
+    const headers: Record<string, string> = { accept: "application/json" };
+    const token = this.accessToken();
+    if (token) {
+      headers.authorization = `Bearer ${token}`;
+    }
+    const response = await this.fetchImpl(url, { headers });
     if (!response.ok) {
       throw new Error(`Кніжны воз API ${path}: HTTP ${response.status}`);
     }
@@ -256,4 +308,64 @@ export class CatalogClient {
     store.set(key, { value, expiresAt: this.now() + CACHE_TTL_MS });
     return value;
   }
+}
+
+function hasBookRelations(book: ApiBook): boolean {
+  return Array.isArray(book.categories) && Array.isArray(book.roles);
+}
+
+function toSummary(book: ApiBook, people: ApiPerson[], roles: ApiRole[]): BookSummary {
+  const peopleById = new Map(people.map((person) => [person.id, person]));
+  const rolesById = new Map(roles.map((role) => [role.id, role.name]));
+  const grouped = new Map<string, string[]>();
+  for (const link of book.roles ?? []) {
+    const roleName = rolesById.get(link.role_id) ?? "Роля";
+    const person = peopleById.get(link.person_id);
+    const name = [person?.firstName, person?.lastName].filter(Boolean).join(" ").trim();
+    const names = grouped.get(roleName) ?? [];
+    names.push(name || link.person_id);
+    grouped.set(roleName, names);
+  }
+  const resolvedRoles = [...grouped].map(([role, names]) => ({ role, names }));
+  const chapters = [...(book.chapters ?? [])]
+    .sort((left, right) => (left.number ?? 0) - (right.number ?? 0))
+    .map((chapter) => ({
+      id: chapter.id,
+      name: chapter.title,
+      duration: chapter.duration,
+      url: chapter.url,
+      blocked: false,
+    }));
+  return {
+    id: book.id,
+    imageUri: book.banner_url ?? "",
+    name: book.title,
+    author: resolvedRoles.find((role) => role.role === "Аўтар")?.names.join(", ") ?? "",
+    description: book.description?.replaceAll("&nbsp;", " ").trim() ?? "",
+    categories: book.categories ?? [],
+    roles: resolvedRoles,
+    totalDuration: chapters.reduce((sum, chapter) => sum + chapter.duration, 0),
+    isPublished: book.isPublished !== false,
+    chapters,
+  };
+}
+
+async function mapPool<T, R>(
+  items: T[],
+  limit: number,
+  mapItem: (item: T) => Promise<R>,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const worker = async () => {
+    while (next < items.length) {
+      const index = next;
+      next += 1;
+      results[index] = await mapItem(items[index]!);
+    }
+  };
+  await Promise.all(
+    Array.from({ length: Math.min(limit, items.length) }, () => worker()),
+  );
+  return results;
 }
