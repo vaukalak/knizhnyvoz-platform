@@ -232,7 +232,7 @@ export class CatalogClient {
     private readonly apiBase = process.env.KNIZHNYVOZ_API_BASE ?? DEFAULT_API_BASE,
     private readonly fetchImpl: typeof fetch = fetch,
     private readonly now: () => number = () => Date.now(),
-    private readonly token = process.env.KNIZHNYVOZ_API_TOKEN,
+    private readonly token = process.env.AUTH_COOKIE ?? process.env.KNIZHNYVOZ_API_TOKEN,
   ) {}
 
   async listBooks(): Promise<BookSummary[]> {
@@ -286,7 +286,7 @@ export class CatalogClient {
     const headers: Record<string, string> = { accept: "application/json" };
     const token = this.accessToken();
     if (token) {
-      headers.authorization = `Bearer ${token}`;
+      headers.cookie = token.includes("=") ? token : `auth_token=${token}`;
     }
     const response = await this.fetchImpl(url, { headers });
     if (!response.ok) {

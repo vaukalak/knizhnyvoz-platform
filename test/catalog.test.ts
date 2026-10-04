@@ -73,7 +73,7 @@ describe("searchBooks", () => {
 
 describe("CatalogClient", () => {
   it("збірае аўтара з роляў і людзей і шле токен", async () => {
-    const seen: { url: string; authorization?: string }[] = [];
+    const seen: { url: string; cookie?: string }[] = [];
     const apiBook = {
       id: "book-1",
       title: "Вожык і ліс",
@@ -95,7 +95,7 @@ describe("CatalogClient", () => {
     const fetchImpl: typeof fetch = async (input, init) => {
       const url = String(input);
       const headers = new Headers(init?.headers);
-      seen.push({ url, authorization: headers.get("authorization") ?? undefined });
+      seen.push({ url, cookie: headers.get("cookie") ?? undefined });
       const body = url.endsWith("/books")
         ? [apiBook]
         : url.endsWith("/people")
@@ -119,7 +119,14 @@ describe("CatalogClient", () => {
     assert.equal(found.duration, "1 гадз 0 хв");
     assert.equal(found.isPublished, false);
     assert.equal(seen[0]?.url, "https://api.knizhnyvoz.test/books");
-    assert.equal(seen[0]?.authorization, "Bearer secret-token");
+    assert.equal(seen[0]?.cookie, "auth_token=secret-token");
+
+    delete process.env.KNIZHNYVOZ_API_TOKEN;
+    process.env.AUTH_COOKIE = "cookie-jwt";
+    const fromEnv = new CatalogClient("https://api.knizhnyvoz.test", fetchImpl, () => 1);
+    await fromEnv.listCategories();
+    assert.equal(seen.at(-1)?.cookie, "auth_token=cookie-jwt");
+    delete process.env.AUTH_COOKIE;
     const listed = await catalog.listCategories();
     assert.equal(listed[0]?.key, "babies");
   });
