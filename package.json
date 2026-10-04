@@ -1,0 +1,26 @@
+{
+  "name": "knizhnyvoz-mcp",
+  "version": "1.0.0",
+  "private": true,
+  "description": "MCP-сервер каталога аўдыякніг «Кніжны воз»",
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "tsx src/stdio.ts",
+    "start:http": "tsx src/http.ts",
+    "typecheck": "tsc --noEmit",
+    "test": "tsx --test test/**/*.test.ts"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/node": "^2.1.1",
+    "@modelcontextprotocol/server": "^2.3.0",
+    "zod": "^4.1.12"
+  },
+  "devDependencies": {
+    "@types/node": "^22.15.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.9.0"
+  }
+}
